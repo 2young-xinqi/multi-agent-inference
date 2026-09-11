@@ -50,8 +50,8 @@
 
 ```
 multi-agent-inference/
-├── docker-compose.yml      # 8个服务编排
-├── .env                    # 环境变量
+├── docker-compose.yml      # 7 个服务编排
+├── .env.example            # 环境变量说明（变量已配在 compose 中）
 ├── gateway/                # 用户接口 Agent（FastAPI）
 │   ├── main.py
 │   ├── Dockerfile
@@ -79,17 +79,19 @@ multi-agent-inference/
 
 ### 步骤 1：下载模型（ModelScope）
 
-由于 HuggingFace（含 hf-mirror）连接不稳定，使用 **ModelScope（阿里魔搭）** 下载 Qwen 模型：
+由于 HuggingFace（含 hf-mirror）连接不稳定，使用 **ModelScope（阿里魔搭）** 下载 Qwen 模型。
+
+以下命令在**项目根目录**执行（`cache_dir` 为相对路径，下载后会生成 `models/models/...` 的目录层级）：
 
 ```powershell
 # 安装 modelscope
 pip install modelscope
 
 # 下载 FP16 模型（约 1GB）
-python -c "from modelscope import snapshot_download; snapshot_download('Qwen/Qwen2-0.5B-Instruct', cache_dir='E:/per_l/demo/multi-agent-inference/models')"
+python -c "from modelscope import snapshot_download; snapshot_download('Qwen/Qwen2-0.5B-Instruct', cache_dir='models')"
 
-# 下载 INT4 量化模型（约 0.7GB）
-python -c "from modelscope import snapshot_download; snapshot_download('Qwen/Qwen2-0.5B-Instruct-GPTQ-Int4', cache_dir='E:/per_l/demo/multi-agent-inference/models')"
+# 下载 INT4 量化模型（约 0.7GB，GPTQ）
+python -c "from modelscope import snapshot_download; snapshot_download('Qwen/Qwen2-0.5B-Instruct-GPTQ-Int4', cache_dir='models')"
 ```
 
 下载后目录结构（ModelScope 缓存格式）：
@@ -103,7 +105,7 @@ models/models/
 ### 步骤 2：构建并启动服务
 
 ```powershell
-cd E:\per_l\demo\multi-agent-inference
+cd multi-agent-inference
 
 # 构建镜像 + 后台启动全部服务
 docker compose up -d --build
@@ -115,7 +117,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-预期 8 个服务：
+预期 7 个服务：
 
 | 容器 | 作用 | 端口 |
 |------|------|------|
@@ -172,7 +174,7 @@ docker compose logs -f monitor     # 显存监控
 第 4 个终端跑负载测试：
 
 ```powershell
-cd E:\per_l\demo\multi-agent-inference\client
+cd client
 pip install httpx
 python load_test.py
 ```
@@ -256,6 +258,18 @@ BATCH_PRESSURE = 50   # 队列积压阈值（16 并发不触发）
 4. 高复杂度 + 长输出 → FP16 保质量
 5. 中等复杂度 → FP16
 6. 短任务 → INT4 低延迟
+
+### 6.4 双卡模式切换
+
+`docker-compose.yml` 中默认单卡（两个引擎共用 GPU 0，故显存阈值调高到 0.98）。若有多卡，把 INT4 引擎绑到另一张卡：
+
+```yaml
+vllm-int4:
+  environment:
+    - NVIDIA_VISIBLE_DEVICES=1    # 改为 GPU 1
+```
+
+改用双卡后每张卡的静态占用下降，可适当调高两个引擎的 `--gpu-memory-utilization`（如 0.85），并相应下调 `MEM_PRESSURE` 使显存压力判定重新生效。
 
 ---
 
