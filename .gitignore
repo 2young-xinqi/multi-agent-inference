@@ -1,0 +1,44 @@
+# ==================== 环境变量与密钥 ====================
+# .env 可能包含 Token/密码，本地保留、不入库；模板见 .env.example
+.env
+.env.local
+.env.*.local
+
+# ==================== 模型权重（体积大，按 README 步骤重新下载）====================
+models/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.gguf
+
+# ==================== Docker 数据卷（容器运行时生成）====================
+volumes/
+
+# ==================== IDE / 编辑器 ====================
+.idea/
+.vscode/
+*.iml
+*.swp
+
+# ==================== Python ====================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# ==================== 日志与临时文件 ====================
+*.log
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db

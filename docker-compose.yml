@@ -1,0 +1,161 @@
+version: "3.9"
+
+# =====================================================
+# 项目二：多智能体协作的推理调度系统
+# 三个 Agent：gateway(用户接口) / strategy(推理策略) / validator(一致性校验)
+# 旁路：monitor(显存监控)
+# 通信：Redis 消息队列
+# 推理：vLLM FP16 + INT4 双引擎（单卡模式，可切换双卡）
+# =====================================================
+
+services:
+  # ============ 通信层：Redis 消息队列 ============
+  redis:
+    container_name: agent-redis
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - ./volumes/redis:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks: [agent_net]
+
+  # ============ 用户接口 Agent ============
+  gateway:
+    container_name: agent-gateway
+    build: ./gateway
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+    networks: [agent_net]
+
+  # ============ 推理策略 Agent ============
+  strategy:
+    container_name: agent-strategy
+    build: ./strategy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - VLLM_FP16_URL=http://vllm-fp16:8000/v1
+      - VLLM_INT4_URL=http://vllm-int4:8000/v1
+      - VLLM_FP16_MODEL=qwen-fp16
+      - VLLM_INT4_MODEL=qwen-int4
+    depends_on:
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+    networks: [agent_net]
+
+  # ============ 一致性校验 Agent ============
+  validator:
+    container_name: agent-validator
+    build: ./validator
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - VLLM_FP16_URL=http://vllm-fp16:8000/v1
+      - VLLM_INT4_URL=http://vllm-int4:8000/v1
+      - VLLM_FP16_MODEL=qwen-fp16
+      - VLLM_INT4_MODEL=qwen-int4
+    depends_on:
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+    networks: [agent_net]
+
+  # ============ 显存监控 Agent ============
+  monitor:
+    container_name: agent-monitor
+    build: ./monitor
+    runtime: nvidia
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    depends_on:
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+    networks: [agent_net]
+
+  # ============ 推理引擎：FP16（高精度，慢）============
+  vllm-fp16:
+    container_name: vllm-fp16
+    image: vllm/vllm-openai:v0.6.3
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0          # 单卡：绑 GPU 0；双卡时可改为 0
+      - HF_HOME=/root/.cache/huggingface
+    command: >
+      --model /models/models/Qwen--Qwen2-0.5B-Instruct/snapshots/master
+      --served-model-name qwen-fp16
+      --max-model-len 1024
+      --gpu-memory-utilization 0.50
+      --max-num-seqs 8
+      --swap-space 1
+      --dtype float16
+      --enforce-eager
+    volumes:
+      - ./volumes/huggingface:/root/.cache/huggingface
+      - ./models:/models:ro
+    ports:
+      - "8001:8000"
+    shm_size: "2gb"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    networks: [agent_net]
+
+  # ============ 推理引擎：INT4（低精度量化，快）============
+  vllm-int4:
+    container_name: vllm-int4
+    image: vllm/vllm-openai:v0.6.3
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0          # 单卡：与 FP16 共用 GPU 0；双卡时改为 1
+      - HF_HOME=/root/.cache/huggingface
+    command: >
+      --model /models/models/Qwen--Qwen2-0.5B-Instruct-GPTQ-Int4/snapshots/master
+      --served-model-name qwen-int4
+      --max-model-len 1024
+      --gpu-memory-utilization 0.30
+      --max-num-seqs 8
+      --swap-space 1
+      --quantization gptq
+      --dtype float16
+      --enforce-eager
+    volumes:
+      - ./volumes/huggingface:/root/.cache/huggingface
+      - ./models:/models:ro
+    ports:
+      - "8002:8000"
+    shm_size: "2gb"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    networks: [agent_net]
+
+networks:
+  agent_net:
+    driver: bridge
